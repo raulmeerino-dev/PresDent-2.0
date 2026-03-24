@@ -26,16 +26,10 @@ class SettingsMenuScreen extends StatelessWidget {
               final isDark = mode == ThemeMode.dark;
               return Align(
                 alignment: Alignment.topRight,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(Icons.nightlight_round, size: 18),
-                    const SizedBox(width: 4),
-                    Switch.adaptive(
-                      value: isDark,
-                      onChanged: (value) => AppThemeService.instance.setDarkMode(value),
-                    ),
-                  ],
+                child: IconButton.filledTonal(
+                  tooltip: isDark ? 'Modo claro' : 'Modo oscuro',
+                  onPressed: () => AppThemeService.instance.setDarkMode(!isDark),
+                  icon: Icon(isDark ? Icons.light_mode_outlined : Icons.nightlight_round),
                 ),
               );
             },

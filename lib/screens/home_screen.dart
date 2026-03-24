@@ -8,8 +8,15 @@ import 'patient_profile_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   final VoidCallback onRefreshParent;
+  final int? activeDoctorId;
+  final bool isAdmin;
 
-  const HomeScreen({super.key, required this.onRefreshParent});
+  const HomeScreen({
+    super.key,
+    required this.onRefreshParent,
+    required this.activeDoctorId,
+    required this.isAdmin,
+  });
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -30,7 +37,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _loadRecent() async {
     setState(() => _loading = true);
-    final rows = await _db.getEstimates(patientFilter: _filterController.text);
+    final rows = await _db.getEstimates(
+      patientFilter: _filterController.text,
+      doctorId: widget.isAdmin ? null : widget.activeDoctorId,
+    );
     setState(() {
       _recent = rows.take(20).toList();
       _loading = false;

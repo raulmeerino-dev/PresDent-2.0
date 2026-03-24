@@ -11,6 +11,8 @@ class DatabaseHelper {
 
   static final DatabaseHelper instance = DatabaseHelper._();
   static Database? _database;
+  static const _adminDoctorName = 'Admin (General)';
+  static const _adminDoctorColor = '1D3557';
   static const _defaultDoctorName = 'Doctor principal';
   static const _defaultPatientName = 'Paciente general';
   static const _requestedCatalogVersion = '2026-03-24-catalog-v6-acentos-puentes';
@@ -114,7 +116,7 @@ class DatabaseHelper {
 
     return openDatabase(
       path,
-      version: 6,
+      version: 7,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
       onOpen: (db) async {
@@ -127,7 +129,9 @@ class DatabaseHelper {
     await db.execute('''
       CREATE TABLE doctores (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        nombre TEXT NOT NULL
+        nombre TEXT NOT NULL,
+        is_admin INTEGER NOT NULL DEFAULT 0,
+        color_hex TEXT
       )
     ''');
 
@@ -151,6 +155,8 @@ class DatabaseHelper {
         color_hex TEXT,
         icono TEXT,
         pieza_tipo TEXT,
+        source_admin_treatment_id INTEGER,
+        is_customized INTEGER NOT NULL DEFAULT 0,
         FOREIGN KEY (doctor_id) REFERENCES doctores (id)
       )
     ''');
@@ -185,9 +191,18 @@ class DatabaseHelper {
       )
     ''');
 
-    final defaultDoctorId = await db.insert('doctores', {'nombre': _defaultDoctorName});
+    final adminDoctorId = await db.insert('doctores', {
+      'nombre': _adminDoctorName,
+      'is_admin': 1,
+      'color_hex': _adminDoctorColor,
+    });
+    await _seedTreatments(db, doctorId: adminDoctorId);
+    final defaultDoctorId = await db.insert('doctores', {
+      'nombre': _defaultDoctorName,
+      'is_admin': 0,
+    });
     await db.insert('pacientes', {'nombre': _defaultPatientName, 'doctor_id': defaultDoctorId});
-    await _seedTreatments(db, doctorId: defaultDoctorId);
+    await _seedTreatmentsFromAdmin(db, doctorId: defaultDoctorId, adminDoctorId: adminDoctorId);
   }
 
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
@@ -206,13 +221,18 @@ class DatabaseHelper {
     if (oldVersion < 6) {
       await _ensureSchemaCompatibility(db);
     }
+    if (oldVersion < 7) {
+      await _ensureSchemaCompatibility(db);
+    }
   }
 
   Future<void> _ensureSchemaCompatibility(Database db) async {
     await db.execute('''
       CREATE TABLE IF NOT EXISTS doctores (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        nombre TEXT NOT NULL
+        nombre TEXT NOT NULL,
+        is_admin INTEGER NOT NULL DEFAULT 0,
+        color_hex TEXT
       )
     ''');
 
@@ -257,6 +277,26 @@ class DatabaseHelper {
     if (!hasTreatmentDoctorId) {
       await db.execute('ALTER TABLE tratamientos ADD COLUMN doctor_id INTEGER');
     }
+
+    final hasDoctorAdmin = await _columnExists(db, 'doctores', 'is_admin');
+    if (!hasDoctorAdmin) {
+      await db.execute('ALTER TABLE doctores ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0');
+    }
+
+    final hasDoctorColor = await _columnExists(db, 'doctores', 'color_hex');
+    if (!hasDoctorColor) {
+      await db.execute('ALTER TABLE doctores ADD COLUMN color_hex TEXT');
+    }
+
+    final hasSourceAdminTreatment = await _columnExists(db, 'tratamientos', 'source_admin_treatment_id');
+    if (!hasSourceAdminTreatment) {
+      await db.execute('ALTER TABLE tratamientos ADD COLUMN source_admin_treatment_id INTEGER');
+    }
+
+    final hasIsCustomized = await _columnExists(db, 'tratamientos', 'is_customized');
+    if (!hasIsCustomized) {
+      await db.execute('ALTER TABLE tratamientos ADD COLUMN is_customized INTEGER NOT NULL DEFAULT 0');
+    }
   }
 
   Future<bool> _columnExists(Database db, String tableName, String columnName) async {
@@ -277,15 +317,26 @@ class DatabaseHelper {
     final db = _database;
     if (db == null) return;
 
+    final adminDoctorId = await _ensureAdminDoctor(db);
+
     await _deduplicateDoctors(db);
     await _deduplicateTreatments(db);
 
     int? defaultDoctorId;
     final doctorCount = Sqflite.firstIntValue(await db.rawQuery('SELECT COUNT(*) FROM doctores'));
     if ((doctorCount ?? 0) == 0) {
-      defaultDoctorId = await db.insert('doctores', {'nombre': _defaultDoctorName});
+      defaultDoctorId = await db.insert('doctores', {
+        'nombre': _defaultDoctorName,
+        'is_admin': 0,
+      });
     } else {
-      final doctorRows = await db.query('doctores', columns: ['id'], orderBy: 'id ASC', limit: 1);
+      final doctorRows = await db.query(
+        'doctores',
+        columns: ['id'],
+        where: 'is_admin = 0',
+        orderBy: 'id ASC',
+        limit: 1,
+      );
       if (doctorRows.isNotEmpty) {
         defaultDoctorId = doctorRows.first['id'] as int;
       }
@@ -297,6 +348,7 @@ class DatabaseHelper {
     }
 
     await _ensureDoctorScopedTreatments(db);
+    await _linkDoctorTreatmentsToAdmin(db, adminDoctorId: adminDoctorId);
     await _syncRequestedTreatmentCatalog(db);
 
     await _replaceDeprecatedTreatment(
@@ -333,11 +385,19 @@ class DatabaseHelper {
 
   Future<void> _syncRequestedTreatmentCatalog(Database db) async {
     await db.transaction((txn) async {
-      final doctorRows = await txn.query('doctores', columns: ['id']);
+      final adminDoctorId = await _getAdminDoctorId(txn);
+      if (adminDoctorId == null) return;
+
+      final doctorRows = await txn.query('doctores', columns: ['id', 'is_admin']);
       for (final row in doctorRows) {
         final doctorId = row['id'];
         if (doctorId is! int) continue;
-        await _ensureDoctorTreatments(txn, doctorId);
+        final isAdmin = (row['is_admin'] as int? ?? 0) == 1;
+        if (isAdmin) {
+          await _ensureDoctorTreatments(txn, doctorId);
+          continue;
+        }
+        await _seedTreatmentsFromAdmin(txn, doctorId: doctorId, adminDoctorId: adminDoctorId);
       }
 
       await txn.insert(
@@ -357,8 +417,10 @@ class DatabaseHelper {
     );
     if ((scopedCount ?? 0) > 0) return;
 
-    final doctorRows = await db.query('doctores', columns: ['id'], orderBy: 'id ASC');
+    final doctorRows = await db.query('doctores', columns: ['id', 'is_admin'], orderBy: 'id ASC');
     if (doctorRows.isEmpty) return;
+
+    final adminDoctorId = await _getAdminDoctorId(db);
 
     final globalRows = await db.query(
       'tratamientos',
@@ -370,20 +432,55 @@ class DatabaseHelper {
       for (final doctor in doctorRows) {
         final doctorId = doctor['id'];
         if (doctorId is! int) continue;
+        final isAdmin = (doctor['is_admin'] as int? ?? 0) == 1;
 
         if (globalRows.isNotEmpty) {
           for (final row in globalRows) {
             final cloned = Map<String, Object?>.from(row)
               ..remove('id')
-              ..['doctor_id'] = doctorId;
+              ..['doctor_id'] = doctorId
+              ..['source_admin_treatment_id'] = null
+              ..['is_customized'] = 0;
             await txn.insert('tratamientos', cloned);
           }
+          continue;
+        }
+
+        if (!isAdmin && adminDoctorId != null) {
+          await _seedTreatmentsFromAdmin(txn, doctorId: doctorId, adminDoctorId: adminDoctorId);
           continue;
         }
 
         await _ensureDoctorTreatments(txn, doctorId);
       }
     });
+  }
+
+  Future<void> _assignPatientToDoctorIfNeeded(
+    DatabaseExecutor db, {
+    required int patientId,
+    required int? doctorId,
+  }) async {
+    if (doctorId == null) return;
+
+    final patientRows = await db.query(
+      'pacientes',
+      columns: ['doctor_id'],
+      where: 'id = ?',
+      whereArgs: [patientId],
+      limit: 1,
+    );
+    if (patientRows.isEmpty) return;
+
+    final currentDoctorId = patientRows.first['doctor_id'] as int?;
+    if (currentDoctorId != null) return;
+
+    await db.update(
+      'pacientes',
+      {'doctor_id': doctorId},
+      where: 'id = ?',
+      whereArgs: [patientId],
+    );
   }
 
   Future<void> _ensureDoctorTreatments(DatabaseExecutor db, int doctorId) async {
@@ -396,6 +493,186 @@ class DatabaseHelper {
     if ((count ?? 0) > 0) return;
 
     await _seedTreatmentsForDoctor(db, doctorId);
+  }
+
+  Future<int?> _getAdminDoctorId(DatabaseExecutor db) async {
+    final rows = await db.query(
+      'doctores',
+      columns: ['id'],
+      where: 'is_admin = 1',
+      orderBy: 'id ASC',
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    final value = rows.first['id'];
+    return value is int ? value : null;
+  }
+
+  Future<int> _ensureAdminDoctor(Database db) async {
+    final existing = await _getAdminDoctorId(db);
+    if (existing != null) {
+      await db.update(
+        'doctores',
+        {'color_hex': _adminDoctorColor},
+        where: 'id = ? AND (color_hex IS NULL OR TRIM(color_hex) = \'\')',
+        whereArgs: [existing],
+      );
+      await _ensureDoctorTreatments(db, existing);
+      return existing;
+    }
+
+    final inserted = await db.insert('doctores', {
+      'nombre': _adminDoctorName,
+      'is_admin': 1,
+      'color_hex': _adminDoctorColor,
+    });
+    await _seedTreatments(db, doctorId: inserted);
+    return inserted;
+  }
+
+  Future<void> _seedTreatmentsFromAdmin(
+    DatabaseExecutor db, {
+    required int doctorId,
+    required int adminDoctorId,
+  }) async {
+    if (doctorId == adminDoctorId) return;
+
+    final adminRows = await db.query(
+      'tratamientos',
+      columns: ['id', 'nombre', 'precio', 'color_hex', 'icono', 'pieza_tipo'],
+      where: 'doctor_id = ?',
+      whereArgs: [adminDoctorId],
+      orderBy: 'id ASC',
+    );
+    if (adminRows.isEmpty) return;
+
+    final doctorRows = await db.query(
+      'tratamientos',
+      columns: ['id', 'nombre', 'source_admin_treatment_id'],
+      where: 'doctor_id = ?',
+      whereArgs: [doctorId],
+    );
+
+    final existingBySource = <int, int>{};
+    final existingNames = <String>{};
+    for (final row in doctorRows) {
+      final sourceId = row['source_admin_treatment_id'];
+      if (sourceId is int) {
+        existingBySource[sourceId] = (row['id'] as int?) ?? sourceId;
+      }
+      final name = (row['nombre'] as String? ?? '').trim();
+      if (name.isNotEmpty) {
+        existingNames.add(_normalizedKey(name));
+      }
+    }
+
+    for (final adminRow in adminRows) {
+      final adminTreatmentId = adminRow['id'];
+      final adminName = (adminRow['nombre'] as String? ?? '').trim();
+      if (adminTreatmentId is! int || adminName.isEmpty) continue;
+      if (existingBySource.containsKey(adminTreatmentId)) continue;
+      if (existingNames.contains(_normalizedKey(adminName))) continue;
+
+      await db.insert('tratamientos', {
+        'doctor_id': doctorId,
+        'nombre': adminName,
+        'precio': (adminRow['precio'] as num?)?.toDouble() ?? 0,
+        'color_hex': adminRow['color_hex'] as String?,
+        'icono': adminRow['icono'] as String?,
+        'pieza_tipo': adminRow['pieza_tipo'] as String?,
+        'source_admin_treatment_id': adminTreatmentId,
+        'is_customized': 0,
+      });
+    }
+  }
+
+  Future<void> _linkDoctorTreatmentsToAdmin(
+    Database db, {
+    required int adminDoctorId,
+  }) async {
+    final adminRows = await db.query(
+      'tratamientos',
+      columns: ['id', 'nombre', 'precio', 'color_hex', 'icono', 'pieza_tipo'],
+      where: 'doctor_id = ?',
+      whereArgs: [adminDoctorId],
+    );
+    if (adminRows.isEmpty) return;
+
+    final adminByName = <String, Map<String, Object?>>{};
+    for (final row in adminRows) {
+      final name = (row['nombre'] as String? ?? '').trim();
+      if (name.isEmpty) continue;
+      adminByName[_normalizedKey(name)] = row;
+    }
+
+    final doctors = await db.query('doctores', columns: ['id', 'is_admin']);
+    for (final doctor in doctors) {
+      final doctorId = doctor['id'];
+      if (doctorId is! int || doctorId == adminDoctorId) continue;
+
+      final rows = await db.query(
+        'tratamientos',
+        columns: ['id', 'nombre', 'precio', 'color_hex', 'icono', 'pieza_tipo', 'source_admin_treatment_id', 'is_customized'],
+        where: 'doctor_id = ?',
+        whereArgs: [doctorId],
+      );
+
+      for (final row in rows) {
+        final id = row['id'];
+        if (id is! int) continue;
+        final currentSource = row['source_admin_treatment_id'];
+        if (currentSource is int) continue;
+        final name = (row['nombre'] as String? ?? '').trim();
+        if (name.isEmpty) continue;
+        final adminMatch = adminByName[_normalizedKey(name)];
+        if (adminMatch == null) {
+          await db.update(
+            'tratamientos',
+            {'is_customized': 1},
+            where: 'id = ?',
+            whereArgs: [id],
+          );
+          continue;
+        }
+
+        final adminId = adminMatch['id'];
+        if (adminId is! int) continue;
+        final equivalent = _rowsEquivalent(row, adminMatch);
+        await db.update(
+          'tratamientos',
+          {
+            'source_admin_treatment_id': adminId,
+            'is_customized': equivalent ? 0 : 1,
+          },
+          where: 'id = ?',
+          whereArgs: [id],
+        );
+      }
+
+      await _seedTreatmentsFromAdmin(db, doctorId: doctorId, adminDoctorId: adminDoctorId);
+    }
+  }
+
+  bool _rowsEquivalent(Map<String, Object?> left, Map<String, Object?> right) {
+    final leftName = (left['nombre'] as String? ?? '').trim();
+    final rightName = (right['nombre'] as String? ?? '').trim();
+    if (_normalizedKey(leftName) != _normalizedKey(rightName)) return false;
+
+    final leftPrice = (left['precio'] as num?)?.toDouble();
+    final rightPrice = (right['precio'] as num?)?.toDouble();
+    if (leftPrice != rightPrice) return false;
+
+    final leftColor = (left['color_hex'] as String? ?? '').trim().toUpperCase();
+    final rightColor = (right['color_hex'] as String? ?? '').trim().toUpperCase();
+    if (leftColor != rightColor) return false;
+
+    final leftIcon = (left['icono'] as String? ?? '').trim();
+    final rightIcon = (right['icono'] as String? ?? '').trim();
+    if (leftIcon != rightIcon) return false;
+
+    final leftPieceType = (left['pieza_tipo'] as String? ?? '').trim();
+    final rightPieceType = (right['pieza_tipo'] as String? ?? '').trim();
+    return leftPieceType == rightPieceType;
   }
 
   Future<void> _seedTreatmentsForDoctor(DatabaseExecutor db, int doctorId) async {
@@ -417,6 +694,8 @@ class DatabaseHelper {
       'color_hex': _catalogColorForIcon(icon),
       'icono': icon,
       'pieza_tipo': _inferCatalogPieceType(normalized),
+      'source_admin_treatment_id': null,
+      'is_customized': 0,
     };
   }
 
@@ -634,13 +913,14 @@ class DatabaseHelper {
       'doctores',
       where: where,
       whereArgs: whereArgs,
-      orderBy: 'nombre ASC',
+      orderBy: 'is_admin DESC, nombre ASC',
     );
     return rows.map(Doctor.fromMap).toList();
   }
 
   Future<int> insertDoctor(Doctor doctor) async {
     final db = await database;
+    final adminDoctorId = await _getAdminDoctorId(db);
     final normalizedName = doctor.name.trim();
     final existing = await db.query(
       'doctores',
@@ -656,8 +936,15 @@ class DatabaseHelper {
 
     final map = doctor.toMap()..remove('id');
     map['nombre'] = normalizedName;
+    map['is_admin'] = doctor.isAdmin ? 1 : 0;
     final newDoctorId = await db.insert('doctores', map);
-    await _ensureDoctorTreatments(db, newDoctorId);
+    if (doctor.isAdmin) {
+      await _ensureDoctorTreatments(db, newDoctorId);
+    } else if (adminDoctorId != null) {
+      await _seedTreatmentsFromAdmin(db, doctorId: newDoctorId, adminDoctorId: adminDoctorId);
+    } else {
+      await _ensureDoctorTreatments(db, newDoctorId);
+    }
     return newDoctorId;
   }
 
@@ -685,6 +972,17 @@ class DatabaseHelper {
 
   Future<int> deleteDoctor(int doctorId) async {
     final db = await database;
+    final rows = await db.query(
+      'doctores',
+      columns: ['is_admin'],
+      where: 'id = ?',
+      whereArgs: [doctorId],
+      limit: 1,
+    );
+    if (rows.isNotEmpty && (rows.first['is_admin'] as int? ?? 0) == 1) {
+      return 0;
+    }
+
     return db.transaction((txn) async {
       await txn.update(
         'pacientes',
@@ -790,6 +1088,11 @@ class DatabaseHelper {
     final db = await database;
     if (doctorId != null) {
       await _ensureDoctorTreatments(db, doctorId);
+
+      final adminDoctorId = await _getAdminDoctorId(db);
+      if (adminDoctorId != null && adminDoctorId != doctorId) {
+        await _seedTreatmentsFromAdmin(db, doctorId: doctorId, adminDoctorId: adminDoctorId);
+      }
     }
 
     final clauses = <String>[];
@@ -847,6 +1150,8 @@ class DatabaseHelper {
   Future<int> insertTreatment(Treatment treatment, {required int doctorId}) async {
     final db = await database;
     final normalizedName = treatment.name.trim();
+    final adminDoctorId = await _getAdminDoctorId(db);
+    final isAdminEditor = adminDoctorId != null && doctorId == adminDoctorId;
     final existing = await db.query(
       'tratamientos',
       columns: ['id'],
@@ -862,23 +1167,70 @@ class DatabaseHelper {
     final map = treatment.toMap()..remove('id');
     map['doctor_id'] = doctorId;
     map['nombre'] = normalizedName;
-    return db.insert('tratamientos', map);
+    map['source_admin_treatment_id'] = null;
+    map['is_customized'] = isAdminEditor ? 0 : 1;
+
+    final insertedId = await db.insert('tratamientos', map);
+
+    if (isAdminEditor) {
+      await _propagateAdminTreatmentInsert(db, adminTreatmentId: insertedId);
+    }
+
+    return insertedId;
   }
 
   Future<int> updateTreatment(Treatment treatment, {required int doctorId}) async {
     final db = await database;
-    return db.update(
+    final treatmentId = treatment.id;
+    if (treatmentId == null) return 0;
+
+    final adminDoctorId = await _getAdminDoctorId(db);
+    final isAdminEditor = adminDoctorId != null && doctorId == adminDoctorId;
+    final updatedValues = treatment.toMap()
+      ..remove('id')
+      ..remove('doctor_id');
+
+    final row = await db.query(
       'tratamientos',
-      treatment.toMap()
-        ..remove('id')
-        ..remove('doctor_id'),
+      columns: ['source_admin_treatment_id'],
       where: 'id = ? AND doctor_id = ?',
-      whereArgs: [treatment.id, doctorId],
+      whereArgs: [treatmentId, doctorId],
+      limit: 1,
     );
+    if (row.isEmpty) return 0;
+
+    updatedValues['is_customized'] = isAdminEditor ? 0 : 1;
+
+    final updated = await db.update(
+      'tratamientos',
+      updatedValues,
+      where: 'id = ? AND doctor_id = ?',
+      whereArgs: [treatmentId, doctorId],
+    );
+
+    if (updated > 0 && isAdminEditor) {
+      await _propagateAdminTreatmentUpdate(db, adminTreatmentId: treatmentId, updatedValues: updatedValues);
+    }
+
+    return updated;
   }
 
   Future<int> deleteTreatment(int id, {required int doctorId}) async {
     final db = await database;
+    final adminDoctorId = await _getAdminDoctorId(db);
+    final isAdminEditor = adminDoctorId != null && doctorId == adminDoctorId;
+
+    if (isAdminEditor) {
+      return db.transaction((txn) async {
+        await _propagateAdminTreatmentDelete(txn, adminTreatmentId: id);
+        return txn.delete(
+          'tratamientos',
+          where: 'id = ? AND doctor_id = ?',
+          whereArgs: [id, doctorId],
+        );
+      });
+    }
+
     return db.delete(
       'tratamientos',
       where: 'id = ? AND doctor_id = ?',
@@ -886,14 +1238,114 @@ class DatabaseHelper {
     );
   }
 
+  Future<void> _propagateAdminTreatmentInsert(Database db, {required int adminTreatmentId}) async {
+    final adminDoctorId = await _getAdminDoctorId(db);
+    if (adminDoctorId == null) return;
+
+    final rows = await db.query(
+      'tratamientos',
+      columns: ['nombre', 'precio', 'color_hex', 'icono', 'pieza_tipo'],
+      where: 'id = ? AND doctor_id = ?',
+      whereArgs: [adminTreatmentId, adminDoctorId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return;
+    final adminRow = rows.first;
+    final normalizedName = _normalizedKey((adminRow['nombre'] as String? ?? '').trim());
+
+    final doctors = await db.query(
+      'doctores',
+      columns: ['id', 'is_admin'],
+      where: 'id != ?',
+      whereArgs: [adminDoctorId],
+    );
+
+    for (final doctor in doctors) {
+      final doctorId = doctor['id'];
+      final isAdmin = (doctor['is_admin'] as int? ?? 0) == 1;
+      if (doctorId is! int || isAdmin) continue;
+
+      final existingLinked = await db.query(
+        'tratamientos',
+        columns: ['id'],
+        where: 'doctor_id = ? AND source_admin_treatment_id = ?',
+        whereArgs: [doctorId, adminTreatmentId],
+        limit: 1,
+      );
+      if (existingLinked.isNotEmpty) continue;
+
+      final existingByName = await db.query(
+        'tratamientos',
+        columns: ['id'],
+        where: 'doctor_id = ? AND LOWER(TRIM(nombre)) = LOWER(TRIM(?))',
+        whereArgs: [doctorId, normalizedName],
+        limit: 1,
+      );
+      if (existingByName.isNotEmpty) continue;
+
+      await db.insert('tratamientos', {
+        'doctor_id': doctorId,
+        'nombre': adminRow['nombre'],
+        'precio': adminRow['precio'],
+        'color_hex': adminRow['color_hex'],
+        'icono': adminRow['icono'],
+        'pieza_tipo': adminRow['pieza_tipo'],
+        'source_admin_treatment_id': adminTreatmentId,
+        'is_customized': 0,
+      });
+    }
+  }
+
+  Future<void> _propagateAdminTreatmentUpdate(
+    Database db, {
+    required int adminTreatmentId,
+    required Map<String, Object?> updatedValues,
+  }) async {
+    final propagatedValues = Map<String, Object?>.from(updatedValues)
+      ..remove('source_admin_treatment_id')
+      ..['is_customized'] = 0;
+
+    await db.update(
+      'tratamientos',
+      propagatedValues,
+      where: 'source_admin_treatment_id = ? AND is_customized = 0',
+      whereArgs: [adminTreatmentId],
+    );
+  }
+
+  Future<void> _propagateAdminTreatmentDelete(
+    DatabaseExecutor db, {
+    required int adminTreatmentId,
+  }) async {
+    await db.delete(
+      'tratamientos',
+      where: 'source_admin_treatment_id = ? AND is_customized = 0',
+      whereArgs: [adminTreatmentId],
+    );
+
+    await db.update(
+      'tratamientos',
+      {'source_admin_treatment_id': null},
+      where: 'source_admin_treatment_id = ? AND is_customized = 1',
+      whereArgs: [adminTreatmentId],
+    );
+  }
+
   Future<int> insertEstimate({
     required int patientId,
     required DateTime date,
     required List<EstimateDetail> details,
+    int? doctorId,
   }) async {
     final db = await database;
 
     return db.transaction((txn) async {
+      await _assignPatientToDoctorIfNeeded(
+        txn,
+        patientId: patientId,
+        doctorId: doctorId,
+      );
+
       final total = details.fold<double>(0, (sum, item) => sum + item.lineTotal);
 
       final estimateId = await txn.insert('presupuestos', {
@@ -921,10 +1373,17 @@ class DatabaseHelper {
     required int patientId,
     required DateTime date,
     required List<EstimateDetail> details,
+    int? doctorId,
   }) async {
     final db = await database;
 
     await db.transaction((txn) async {
+      await _assignPatientToDoctorIfNeeded(
+        txn,
+        patientId: patientId,
+        doctorId: doctorId,
+      );
+
       final total = details.fold<double>(0, (sum, item) => sum + item.lineTotal);
 
       await txn.update(
@@ -954,6 +1413,7 @@ class DatabaseHelper {
 
   Future<List<EstimateSummary>> getEstimates({
     int? patientId,
+    int? doctorId,
     String? patientFilter,
     String? doctorFilter,
     String orderBy = 'fecha',
@@ -967,6 +1427,11 @@ class DatabaseHelper {
     if (patientId != null) {
       clauses.add('pr.paciente_id = ?');
       whereArgs.add(patientId);
+    }
+
+    if (doctorId != null) {
+      clauses.add('(p.doctor_id = ? OR p.doctor_id IS NULL)');
+      whereArgs.add(doctorId);
     }
 
     final normalizedPatientFilter = patientFilter?.trim() ?? '';
@@ -1002,7 +1467,7 @@ class DatabaseHelper {
 
     final rows = await db.rawQuery(
       '''
-      SELECT pr.id, pr.paciente_id, p.nombre AS paciente_nombre, d.nombre AS doctor_nombre, pr.fecha, pr.total
+      SELECT pr.id, pr.paciente_id, p.nombre AS paciente_nombre, d.id AS doctor_id, d.nombre AS doctor_nombre, d.color_hex AS doctor_color_hex, pr.fecha, pr.total
       FROM presupuestos pr
       INNER JOIN pacientes p ON p.id = pr.paciente_id
       LEFT JOIN doctores d ON d.id = p.doctor_id
@@ -1020,7 +1485,7 @@ class DatabaseHelper {
 
     final rows = await db.rawQuery(
       '''
-      SELECT pr.id, pr.paciente_id, p.nombre AS paciente_nombre, d.nombre AS doctor_nombre, pr.fecha, pr.total
+      SELECT pr.id, pr.paciente_id, p.nombre AS paciente_nombre, d.id AS doctor_id, d.nombre AS doctor_nombre, d.color_hex AS doctor_color_hex, pr.fecha, pr.total
       FROM presupuestos pr
       INNER JOIN pacientes p ON p.id = pr.paciente_id
       LEFT JOIN doctores d ON d.id = p.doctor_id

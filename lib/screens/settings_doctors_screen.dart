@@ -13,6 +13,16 @@ class SettingsDoctorsScreen extends StatefulWidget {
 class _SettingsDoctorsScreenState extends State<SettingsDoctorsScreen> {
   final _db = DatabaseHelper.instance;
   final _searchController = TextEditingController();
+  static const _doctorColorPalette = [
+    '1D3557',
+    '2A9D8F',
+    'E76F51',
+    '6D597A',
+    '3A86FF',
+    '2D6A4F',
+    'F4A261',
+    'C1121F',
+  ];
 
   List<Doctor> _doctors = [];
   bool _loading = true;
@@ -41,16 +51,51 @@ class _SettingsDoctorsScreenState extends State<SettingsDoctorsScreen> {
 
   Future<void> _openDoctorDialog({Doctor? doctor}) async {
     final nameController = TextEditingController(text: doctor?.name ?? '');
+    String selectedColor = doctor?.colorHex ?? _doctorColorPalette.first;
+    if (!_doctorColorPalette.contains(selectedColor)) {
+      selectedColor = _doctorColorPalette.first;
+    }
 
     final saved = await showDialog<bool>(
       context: context,
       builder: (dialogContext) {
         return AlertDialog(
           title: Text(doctor == null ? 'Nuevo doctor' : 'Editar doctor'),
-          content: TextField(
-            controller: nameController,
-            autofocus: true,
-            decoration: const InputDecoration(labelText: 'Nombre'),
+          content: StatefulBuilder(
+            builder: (context, setDialogState) {
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  TextField(
+                    controller: nameController,
+                    autofocus: true,
+                    decoration: const InputDecoration(labelText: 'Nombre'),
+                  ),
+                  const SizedBox(height: 12),
+                  const Text('Color del perfil'),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: _doctorColorPalette
+                        .map(
+                          (colorHex) => ChoiceChip(
+                            selected: selectedColor == colorHex,
+                            onSelected: (_) => setDialogState(() => selectedColor = colorHex),
+                            showCheckmark: false,
+                            avatar: CircleAvatar(
+                              radius: 8,
+                              backgroundColor: _parseHex(colorHex),
+                            ),
+                            label: const SizedBox(width: 4, height: 4),
+                          ),
+                        )
+                        .toList(),
+                  ),
+                ],
+              );
+            },
           ),
           actions: [
             TextButton(
@@ -72,15 +117,30 @@ class _SettingsDoctorsScreenState extends State<SettingsDoctorsScreen> {
     if (name.isEmpty) return;
 
     if (doctor == null) {
-      await _db.insertDoctor(Doctor(name: name));
+      await _db.insertDoctor(Doctor(name: name, colorHex: selectedColor));
     } else {
-      await _db.updateDoctor(Doctor(id: doctor.id, name: name));
+      await _db.updateDoctor(
+        Doctor(
+          id: doctor.id,
+          name: name,
+          isAdmin: doctor.isAdmin,
+          colorHex: selectedColor,
+        ),
+      );
     }
 
     await _load();
   }
 
   Future<void> _deleteDoctor(Doctor doctor) async {
+    if (doctor.isAdmin) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('La cuenta Admin no se puede eliminar.')),
+      );
+      return;
+    }
+
     final patientsCount = await _db.countPatientsForDoctor(doctor.id!);
     if (!mounted) return;
     final confirmed = await showDialog<bool>(
@@ -158,8 +218,12 @@ class _SettingsDoctorsScreenState extends State<SettingsDoctorsScreen> {
                       return Card(
                         margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
                         child: ListTile(
-                          leading: const CircleAvatar(child: Icon(Icons.medical_services_outlined)),
+                          leading: CircleAvatar(
+                            backgroundColor: _parseHex(doctor.colorHex),
+                            child: const Icon(Icons.medical_services_outlined, color: Colors.white),
+                          ),
                           title: Text(doctor.name),
+                          subtitle: doctor.isAdmin ? const Text('Cuenta general Admin') : null,
                           trailing: Wrap(
                             spacing: 4,
                             children: [
@@ -168,7 +232,7 @@ class _SettingsDoctorsScreenState extends State<SettingsDoctorsScreen> {
                                 icon: const Icon(Icons.edit_outlined),
                               ),
                               IconButton(
-                                onPressed: () => _deleteDoctor(doctor),
+                                onPressed: doctor.isAdmin ? null : () => _deleteDoctor(doctor),
                                 icon: const Icon(Icons.delete_outline),
                               ),
                             ],
@@ -181,5 +245,13 @@ class _SettingsDoctorsScreenState extends State<SettingsDoctorsScreen> {
         ],
       ),
     );
+  }
+
+  Color _parseHex(String? hex) {
+    final normalized = (hex ?? '').trim().replaceAll('#', '');
+    if (!RegExp(r'^[0-9A-Fa-f]{6}$').hasMatch(normalized)) {
+      return Theme.of(context).colorScheme.primary;
+    }
+    return Color(int.parse('FF$normalized', radix: 16));
   }
 }

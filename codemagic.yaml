@@ -17,7 +17,7 @@ workflows:
       groups:
         - secret
       vars:
-        APP_ID_ANDROID: com.example.presdental
+        APP_ID_ANDROID: com.example.presdent20
     scripts:
       - name: Clean and fetch deps
         script: |
@@ -69,7 +69,7 @@ workflows:
       groups:
         - secret
       vars:
-        BUNDLE_ID: com.example.presdental
+        BUNDLE_ID: com.example.presdent20
     scripts:
       - name: Clean and install dependencies
         script: |

@@ -24,17 +24,17 @@ Future<void> main() async {
     databaseFactory = databaseFactoryFfi;
   }
 
-  runApp(const OdontoPresupuestoApp());
+  runApp(const PresDent2App());
 }
 
-class OdontoPresupuestoApp extends StatefulWidget {
-  const OdontoPresupuestoApp({super.key});
+class PresDent2App extends StatefulWidget {
+  const PresDent2App({super.key});
 
   @override
-  State<OdontoPresupuestoApp> createState() => _OdontoPresupuestoAppState();
+  State<PresDent2App> createState() => _PresDent2AppState();
 }
 
-class _OdontoPresupuestoAppState extends State<OdontoPresupuestoApp> {
+class _PresDent2AppState extends State<PresDent2App> {
   final _themeService = AppThemeService.instance;
 
   @override
@@ -113,6 +113,7 @@ class _OdontoPresupuestoAppState extends State<OdontoPresupuestoApp> {
               return MainShell(
                 doctorId: selection.doctor.id,
                 doctorName: selection.doctor.name,
+                isAdmin: selection.doctor.isAdmin,
                 selectedPatientId: selection.patientId,
                 selectedPatientName: selection.patientName,
               );
@@ -127,6 +128,7 @@ class _OdontoPresupuestoAppState extends State<OdontoPresupuestoApp> {
 class MainShell extends StatefulWidget {
   final int? doctorId;
   final String doctorName;
+  final bool isAdmin;
   final int? selectedPatientId;
   final String? selectedPatientName;
 
@@ -134,6 +136,7 @@ class MainShell extends StatefulWidget {
     super.key,
     required this.doctorId,
     required this.doctorName,
+    this.isAdmin = false,
     required this.selectedPatientId,
     this.selectedPatientName,
   });
@@ -147,6 +150,7 @@ class _MainShellState extends State<MainShell> {
   int _currentIndex = 0;
   late int? _activeDoctorId;
   late String _activeDoctorName;
+  late bool _activeIsAdmin;
   late int? _activePatientId;
   late String? _activePatientName;
   static const _topLeftClinicIconAsset = 'assets/images/app_icon.png';
@@ -156,6 +160,7 @@ class _MainShellState extends State<MainShell> {
     super.initState();
     _activeDoctorId = widget.doctorId;
     _activeDoctorName = widget.doctorName;
+    _activeIsAdmin = widget.isAdmin;
     _activePatientId = widget.selectedPatientId;
     _activePatientName = widget.selectedPatientName;
   }
@@ -274,6 +279,7 @@ class _MainShellState extends State<MainShell> {
                         setState(() {
                           _activeDoctorId = selectedDoctor.id;
                           _activeDoctorName = selectedDoctor.name;
+                          _activeIsAdmin = selectedDoctor.isAdmin;
                           _activePatientId = selectedPatient?.id;
                           _activePatientName = selectedPatient?.name;
                         });
@@ -301,6 +307,7 @@ class _MainShellState extends State<MainShell> {
             return MainShell(
               doctorId: selection.doctor.id,
               doctorName: selection.doctor.name,
+              isAdmin: selection.doctor.isAdmin,
               selectedPatientId: selection.patientId,
               selectedPatientName: selection.patientName,
             );
@@ -323,10 +330,42 @@ class _MainShellState extends State<MainShell> {
   @override
   Widget build(BuildContext context) {
     final screens = [
-      HomeScreen(onRefreshParent: () => setState(() {})),
-      HistoryScreen(onRefreshParent: () => setState(() {})),
+      HomeScreen(
+        onRefreshParent: () => setState(() {}),
+        activeDoctorId: _activeDoctorId,
+        isAdmin: _activeIsAdmin,
+      ),
+      HistoryScreen(
+        onRefreshParent: () => setState(() {}),
+        activeDoctorId: _activeDoctorId,
+        isAdmin: _activeIsAdmin,
+      ),
       SettingsScreen(activeDoctorId: _activeDoctorId),
     ];
+
+    const destinations = [
+      NavigationDestination(
+        icon: Icon(Icons.dashboard_outlined),
+        selectedIcon: Icon(Icons.dashboard),
+        label: 'Inicio',
+      ),
+      NavigationDestination(
+        icon: Icon(Icons.history_outlined),
+        selectedIcon: Icon(Icons.history),
+        label: 'Historial',
+      ),
+      NavigationDestination(
+        icon: Icon(Icons.settings_outlined),
+        selectedIcon: Icon(Icons.settings),
+        label: 'Ajustes',
+      ),
+    ];
+
+    if (_currentIndex >= screens.length) {
+      _currentIndex = 0;
+    }
+
+    final settingsIndex = screens.length - 1;
 
     return PopScope<void>(
       canPop: false,
@@ -336,7 +375,7 @@ class _MainShellState extends State<MainShell> {
       },
       child: Scaffold(
         body: screens[_currentIndex],
-        floatingActionButton: _currentIndex == 2
+        floatingActionButton: _currentIndex == settingsIndex
             ? null
             : FloatingActionButton.extended(
                 onPressed: _openNewEstimate,
@@ -363,9 +402,12 @@ class _MainShellState extends State<MainShell> {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Text(
-                              'Doctor: $_activeDoctorName',
+                              _activeIsAdmin ? 'Admin' : 'Doctor: $_activeDoctorName',
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
+                              style: _activeIsAdmin
+                                  ? Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800)
+                                  : null,
                             ),
                             Text(
                               'Paciente: ${_activePatientName ?? 'Sin paciente'}',
@@ -386,23 +428,7 @@ class _MainShellState extends State<MainShell> {
         bottomNavigationBar: NavigationBar(
           selectedIndex: _currentIndex,
           onDestinationSelected: (index) => setState(() => _currentIndex = index),
-          destinations: const [
-            NavigationDestination(
-              icon: Icon(Icons.dashboard_outlined),
-              selectedIcon: Icon(Icons.dashboard),
-              label: 'Inicio',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.history_outlined),
-              selectedIcon: Icon(Icons.history),
-              label: 'Historial',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.settings_outlined),
-              selectedIcon: Icon(Icons.settings),
-              label: 'Ajustes',
-            ),
-          ],
+          destinations: destinations,
         ),
       ),
     );

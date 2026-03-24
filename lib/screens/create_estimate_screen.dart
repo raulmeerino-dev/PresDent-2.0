@@ -298,7 +298,10 @@ class _CreateEstimateScreenState extends State<CreateEstimateScreen> {
     final name = _newPatientController.text.trim();
     if (name.isEmpty) return;
 
-    final id = await _db.insertPatient(Patient(name: name));
+    final id = await _db.insertPatient(
+      Patient(name: name),
+      doctorId: widget.activeDoctorId,
+    );
     _newPatientController.clear();
 
     final patients = await _db.getPatients();
@@ -968,6 +971,7 @@ class _CreateEstimateScreenState extends State<CreateEstimateScreen> {
           patientId: _selectedPatientId!,
           date: _selectedDate,
           details: details,
+          doctorId: widget.activeDoctorId,
         );
       } else {
         await _db.updateEstimate(
@@ -975,6 +979,7 @@ class _CreateEstimateScreenState extends State<CreateEstimateScreen> {
           patientId: _selectedPatientId!,
           date: _selectedDate,
           details: details,
+          doctorId: widget.activeDoctorId,
         );
         estimateId = widget.editingEstimateId!;
       }

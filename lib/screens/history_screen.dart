@@ -9,8 +9,15 @@ import 'patient_profile_screen.dart';
 
 class HistoryScreen extends StatefulWidget {
   final VoidCallback onRefreshParent;
+  final int? activeDoctorId;
+  final bool isAdmin;
 
-  const HistoryScreen({super.key, required this.onRefreshParent});
+  const HistoryScreen({
+    super.key,
+    required this.onRefreshParent,
+    required this.activeDoctorId,
+    required this.isAdmin,
+  });
 
   @override
   State<HistoryScreen> createState() => _HistoryScreenState();
@@ -44,6 +51,12 @@ class _HistoryScreenState extends State<HistoryScreen> with SingleTickerProvider
 
   bool _isSameDay(DateTime left, DateTime right) {
     return left.year == right.year && left.month == right.month && left.day == right.day;
+  }
+
+  Color _doctorColor(String? hex, Color fallback) {
+    final normalized = (hex ?? '').trim().replaceAll('#', '');
+    if (!RegExp(r'^[0-9A-Fa-f]{6}$').hasMatch(normalized)) return fallback;
+    return Color(int.parse('FF$normalized', radix: 16));
   }
 
   List<EstimateSummary> get _visibleItems {
@@ -111,9 +124,21 @@ class _HistoryScreenState extends State<HistoryScreen> with SingleTickerProvider
           child: ListTile(
             contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             leading: IconButton(
-              tooltip: 'Ver perfil del paciente',
+              tooltip: widget.isAdmin
+                  ? 'Doctor: ${item.doctorName ?? 'Sin asignar'} · ver perfil del paciente'
+                  : 'Ver perfil del paciente',
               onPressed: () => _openPatientProfile(item),
-              icon: const Icon(Icons.person_outline),
+              icon: CircleAvatar(
+                radius: 16,
+                backgroundColor: widget.isAdmin
+                    ? _doctorColor(item.doctorColorHex, Theme.of(context).colorScheme.primaryContainer)
+                    : Theme.of(context).colorScheme.primaryContainer,
+                child: Icon(
+                  Icons.person_outline,
+                  size: 17,
+                  color: Theme.of(context).colorScheme.onPrimaryContainer,
+                ),
+              ),
             ),
             title: Text(
               item.patientName,
@@ -140,6 +165,7 @@ class _HistoryScreenState extends State<HistoryScreen> with SingleTickerProvider
   Future<void> _load() async {
     setState(() => _loading = true);
     final rows = await _db.getEstimates(
+      doctorId: widget.isAdmin ? null : widget.activeDoctorId,
       patientFilter: _patientFilterController.text,
       doctorFilter: _patientFilterController.text,
       orderBy: _orderBy,

@@ -78,7 +78,9 @@ class EstimateSummary {
   final int id;
   final int patientId;
   final String patientName;
+  final int? doctorId;
   final String? doctorName;
+  final String? doctorColorHex;
   final DateTime date;
   final double total;
 
@@ -86,7 +88,9 @@ class EstimateSummary {
     required this.id,
     required this.patientId,
     required this.patientName,
+    this.doctorId,
     this.doctorName,
+    this.doctorColorHex,
     required this.date,
     required this.total,
   });
@@ -96,7 +100,9 @@ class EstimateSummary {
       id: map['id'] as int,
       patientId: map['paciente_id'] as int,
       patientName: map['paciente_nombre'] as String,
+      doctorId: map['doctor_id'] as int?,
       doctorName: map['doctor_nombre'] as String?,
+      doctorColorHex: map['doctor_color_hex'] as String?,
       date: DateTime.parse(map['fecha'] as String),
       total: (map['total'] as num).toDouble(),
     );

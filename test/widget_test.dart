@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:presdental/models/treatment.dart';
-import 'package:presdental/services/text_parser_service.dart';
+import 'package:presdent_2_0/models/treatment.dart';
+import 'package:presdent_2_0/services/text_parser_service.dart';
 
 class _ParserCase {
   final String label;
