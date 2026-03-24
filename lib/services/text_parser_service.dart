@@ -182,6 +182,24 @@ class TextParserService {
 
         final quantity = _detectQuantity(quantityScope, [mention.alias]) ?? 1;
 
+        if (_isSectorTreatment(resolvedTreatment)) {
+          final sectorNote = _buildSectorNoteFromToothCodes(
+            localToothCodes.isNotEmpty
+                ? localToothCodes
+                : toothMentions.map((tooth) => tooth.code),
+          );
+          if (sectorNote != null) {
+            matches.add(
+              ParsedTreatment(
+                treatment: resolvedTreatment,
+                quantity: quantity,
+                note: sectorNote,
+              ),
+            );
+            continue;
+          }
+        }
+
         if (_isBridgeTreatment(resolvedTreatment) && toothMentions.length >= 2) {
           matches.add(
             ParsedTreatment(
@@ -390,6 +408,27 @@ class TextParserService {
     return _normalize(treatment.name).contains('puente');
   }
 
+  bool _isSectorTreatment(Treatment treatment) {
+    return _normalize(treatment.pieceType ?? '') == 'sector';
+  }
+
+  String? _buildSectorNoteFromToothCodes(Iterable<String> toothCodes) {
+    final unique = <String>[];
+    for (final code in toothCodes) {
+      final normalizedCode = code.trim();
+      if (_validFdiToothCodes.contains(normalizedCode) && !unique.contains(normalizedCode)) {
+        unique.add(normalizedCode);
+      }
+    }
+
+    if (unique.isEmpty) return null;
+    if (unique.length == 1) return 'Pieza ${unique.first}';
+
+    final ordered = unique
+      ..sort((a, b) => int.parse(a).compareTo(int.parse(b)));
+    return 'Sector ${ordered.first}-${ordered.last}';
+  }
+
   int? _extractPieceCountFromTreatmentName(String treatmentName) {
     final normalized = _normalize(treatmentName);
 
@@ -496,6 +535,15 @@ class TextParserService {
           ParsedTreatment(
             treatment: treatment,
             quantity: sanitizedQuantity,
+          ),
+        );
+      } else if (_isSectorTreatment(treatment)) {
+        final sectorNote = _buildSectorNoteFromToothCodes(uniqueTeeth);
+        parsed.add(
+          ParsedTreatment(
+            treatment: treatment,
+            quantity: sanitizedQuantity,
+            note: sectorNote,
           ),
         );
       } else {
@@ -932,6 +980,9 @@ class TextParserService {
         .replaceAll('compossite', 'composite')
         .replaceAll('compozite', 'composite')
         .replaceAll('endodonsia', 'endodoncia')
+        .replaceAll('multi radicular', 'multirradicular')
+        .replaceAll('multi rradicular', 'multirradicular')
+        .replaceAll('uni radicular', 'unirradicular')
         .replaceAll('estraccion', 'extraccion')
         .replaceAll('extraccion normal', 'exodoncia normal')
         .replaceAll('extraccion compleja', 'exodoncia compleja')
@@ -939,6 +990,7 @@ class TextParserService {
         .replaceAll('protezis', 'protesis')
         .replaceAll('blanqueamento', 'blanqueamiento')
         .replaceAll('brakets', 'brackets')
+        .replaceAll('raspa ge', 'raspaje')
         .replaceAll('piezs', 'piezas')
         .replaceAll('piezaz', 'piezas')
         .replaceAll('pza', 'pieza')

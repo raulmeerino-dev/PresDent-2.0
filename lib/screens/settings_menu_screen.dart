@@ -7,7 +7,12 @@ import 'settings_pdf_screen.dart';
 import 'settings_treatments_screen.dart';
 
 class SettingsMenuScreen extends StatelessWidget {
-  const SettingsMenuScreen({super.key});
+  final int? activeDoctorId;
+
+  const SettingsMenuScreen({
+    super.key,
+    required this.activeDoctorId,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -42,7 +47,9 @@ class SettingsMenuScreen extends StatelessWidget {
             subtitle: 'Crear, editar y eliminar tratamientos',
             onTap: () {
               Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const SettingsTreatmentsScreen()),
+                MaterialPageRoute(
+                  builder: (_) => SettingsTreatmentsScreen(activeDoctorId: activeDoctorId),
+                ),
               );
             },
           ),

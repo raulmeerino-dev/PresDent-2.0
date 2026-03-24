@@ -325,7 +325,7 @@ class _MainShellState extends State<MainShell> {
     final screens = [
       HomeScreen(onRefreshParent: () => setState(() {})),
       HistoryScreen(onRefreshParent: () => setState(() {})),
-      const SettingsScreen(),
+      SettingsScreen(activeDoctorId: _activeDoctorId),
     ];
 
     return PopScope<void>(

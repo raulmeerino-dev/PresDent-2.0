@@ -11,6 +11,8 @@ class DatabaseHelper {
 
   static final DatabaseHelper instance = DatabaseHelper._();
   static Database? _database;
+  static const _defaultDoctorName = 'Doctor principal';
+  static const _defaultPatientName = 'Paciente general';
   static const _requestedCatalogVersion = '2026-03-24-catalog-v6-acentos-puentes';
   static const List<Map<String, Object?>> _requestedTreatmentCatalog = [
     {'nombre': 'Ventana quirúrgica orto implante', 'precio': 120.0},
@@ -112,7 +114,7 @@ class DatabaseHelper {
 
     return openDatabase(
       path,
-      version: 5,
+      version: 6,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
       onOpen: (db) async {
@@ -143,11 +145,13 @@ class DatabaseHelper {
     await db.execute('''
       CREATE TABLE tratamientos (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        doctor_id INTEGER,
         nombre TEXT NOT NULL,
         precio REAL NOT NULL,
         color_hex TEXT,
         icono TEXT,
-        pieza_tipo TEXT
+        pieza_tipo TEXT,
+        FOREIGN KEY (doctor_id) REFERENCES doctores (id)
       )
     ''');
 
@@ -181,7 +185,9 @@ class DatabaseHelper {
       )
     ''');
 
-    await _seedTreatments(db);
+    final defaultDoctorId = await db.insert('doctores', {'nombre': _defaultDoctorName});
+    await db.insert('pacientes', {'nombre': _defaultPatientName, 'doctor_id': defaultDoctorId});
+    await _seedTreatments(db, doctorId: defaultDoctorId);
   }
 
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
@@ -195,6 +201,9 @@ class DatabaseHelper {
       await _ensureSchemaCompatibility(db);
     }
     if (oldVersion < 5) {
+      await _ensureSchemaCompatibility(db);
+    }
+    if (oldVersion < 6) {
       await _ensureSchemaCompatibility(db);
     }
   }
@@ -243,6 +252,11 @@ class DatabaseHelper {
     if (!hasPieceType) {
       await db.execute('ALTER TABLE tratamientos ADD COLUMN pieza_tipo TEXT');
     }
+
+    final hasTreatmentDoctorId = await _columnExists(db, 'tratamientos', 'doctor_id');
+    if (!hasTreatmentDoctorId) {
+      await db.execute('ALTER TABLE tratamientos ADD COLUMN doctor_id INTEGER');
+    }
   }
 
   Future<bool> _columnExists(Database db, String tableName, String columnName) async {
@@ -250,12 +264,12 @@ class DatabaseHelper {
     return rows.any((row) => (row['name'] as String?) == columnName);
   }
 
-  Future<void> _seedTreatments(Database db) async {
+  Future<void> _seedTreatments(Database db, {required int doctorId}) async {
     for (final requested in _requestedTreatmentCatalog) {
       final name = (requested['nombre'] as String?)?.trim();
       final price = (requested['precio'] as num?)?.toDouble();
       if (name == null || name.isEmpty || price == null) continue;
-      await db.insert('tratamientos', _buildCatalogTreatmentRecord(name, price));
+      await db.insert('tratamientos', _buildCatalogTreatmentRecord(name, price, doctorId: doctorId));
     }
   }
 
@@ -266,13 +280,10 @@ class DatabaseHelper {
     await _deduplicateDoctors(db);
     await _deduplicateTreatments(db);
 
-    const defaultDoctorName = 'Doctor principal';
-    const defaultPatientName = 'Paciente general';
-
     int? defaultDoctorId;
     final doctorCount = Sqflite.firstIntValue(await db.rawQuery('SELECT COUNT(*) FROM doctores'));
     if ((doctorCount ?? 0) == 0) {
-      defaultDoctorId = await db.insert('doctores', {'nombre': defaultDoctorName});
+      defaultDoctorId = await db.insert('doctores', {'nombre': _defaultDoctorName});
     } else {
       final doctorRows = await db.query('doctores', columns: ['id'], orderBy: 'id ASC', limit: 1);
       if (doctorRows.isNotEmpty) {
@@ -282,9 +293,10 @@ class DatabaseHelper {
 
     final patientCount = Sqflite.firstIntValue(await db.rawQuery('SELECT COUNT(*) FROM pacientes'));
     if ((patientCount ?? 0) == 0) {
-      await db.insert('pacientes', {'nombre': defaultPatientName, 'doctor_id': defaultDoctorId});
+      await db.insert('pacientes', {'nombre': _defaultPatientName, 'doctor_id': defaultDoctorId});
     }
 
+    await _ensureDoctorScopedTreatments(db);
     await _syncRequestedTreatmentCatalog(db);
 
     await _replaceDeprecatedTreatment(
@@ -320,28 +332,12 @@ class DatabaseHelper {
   }
 
   Future<void> _syncRequestedTreatmentCatalog(Database db) async {
-    final versionRows = await db.query(
-      'app_settings',
-      columns: ['valor'],
-      where: 'clave = ?',
-      whereArgs: ['treatments_catalog_version'],
-      limit: 1,
-    );
-    final appliedVersion = versionRows.isEmpty ? null : versionRows.first['valor'] as String?;
-    if (appliedVersion == _requestedCatalogVersion) return;
-
     await db.transaction((txn) async {
-      final requestedByName = <String, Map<String, Object?>>{};
-      for (final requested in _requestedTreatmentCatalog) {
-        final name = (requested['nombre'] as String?)?.trim();
-        final price = (requested['precio'] as num?)?.toDouble();
-        if (name == null || name.isEmpty || price == null) continue;
-        requestedByName[_normalizedKey(name)] = _buildCatalogTreatmentRecord(name, price);
-      }
-
-      await txn.delete('tratamientos');
-      for (final requested in requestedByName.values) {
-        await txn.insert('tratamientos', requested);
+      final doctorRows = await txn.query('doctores', columns: ['id']);
+      for (final row in doctorRows) {
+        final doctorId = row['id'];
+        if (doctorId is! int) continue;
+        await _ensureDoctorTreatments(txn, doctorId);
       }
 
       await txn.insert(
@@ -355,10 +351,67 @@ class DatabaseHelper {
     });
   }
 
-  Map<String, Object?> _buildCatalogTreatmentRecord(String name, double price) {
+  Future<void> _ensureDoctorScopedTreatments(Database db) async {
+    final scopedCount = Sqflite.firstIntValue(
+      await db.rawQuery('SELECT COUNT(*) FROM tratamientos WHERE doctor_id IS NOT NULL'),
+    );
+    if ((scopedCount ?? 0) > 0) return;
+
+    final doctorRows = await db.query('doctores', columns: ['id'], orderBy: 'id ASC');
+    if (doctorRows.isEmpty) return;
+
+    final globalRows = await db.query(
+      'tratamientos',
+      where: 'doctor_id IS NULL',
+      orderBy: 'id ASC',
+    );
+
+    await db.transaction((txn) async {
+      for (final doctor in doctorRows) {
+        final doctorId = doctor['id'];
+        if (doctorId is! int) continue;
+
+        if (globalRows.isNotEmpty) {
+          for (final row in globalRows) {
+            final cloned = Map<String, Object?>.from(row)
+              ..remove('id')
+              ..['doctor_id'] = doctorId;
+            await txn.insert('tratamientos', cloned);
+          }
+          continue;
+        }
+
+        await _ensureDoctorTreatments(txn, doctorId);
+      }
+    });
+  }
+
+  Future<void> _ensureDoctorTreatments(DatabaseExecutor db, int doctorId) async {
+    final count = Sqflite.firstIntValue(
+      await db.rawQuery(
+        'SELECT COUNT(*) FROM tratamientos WHERE doctor_id = ?',
+        [doctorId],
+      ),
+    );
+    if ((count ?? 0) > 0) return;
+
+    await _seedTreatmentsForDoctor(db, doctorId);
+  }
+
+  Future<void> _seedTreatmentsForDoctor(DatabaseExecutor db, int doctorId) async {
+    for (final requested in _requestedTreatmentCatalog) {
+      final name = (requested['nombre'] as String?)?.trim();
+      final price = (requested['precio'] as num?)?.toDouble();
+      if (name == null || name.isEmpty || price == null) continue;
+      await db.insert('tratamientos', _buildCatalogTreatmentRecord(name, price, doctorId: doctorId));
+    }
+  }
+
+  Map<String, Object?> _buildCatalogTreatmentRecord(String name, double price, {required int doctorId}) {
     final normalized = _normalizedKey(name);
     final icon = _inferCatalogIcon(normalized);
     return {
+      'doctor_id': doctorId,
       'nombre': name,
       'precio': price,
       'color_hex': _catalogColorForIcon(icon),
@@ -490,43 +543,48 @@ class DatabaseHelper {
     required String fromName,
     required String toName,
   }) async {
-    final toRows = await db.query(
-      'tratamientos',
-      columns: ['id'],
-      where: 'LOWER(TRIM(nombre)) = LOWER(TRIM(?))',
-      whereArgs: [toName],
-      orderBy: 'id ASC',
-      limit: 1,
-    );
-    if (toRows.isEmpty) return;
-    final targetId = toRows.first['id'];
-    if (targetId is! int) return;
-
-    final fromRows = await db.query(
-      'tratamientos',
-      columns: ['id'],
-      where: 'LOWER(TRIM(nombre)) = LOWER(TRIM(?))',
-      whereArgs: [fromName],
-      orderBy: 'id ASC',
-    );
-    if (fromRows.isEmpty) return;
-
+    final doctorRows = await db.query('doctores', columns: ['id']);
     await db.transaction((txn) async {
-      for (final row in fromRows) {
-        final fromId = row['id'];
-        if (fromId is! int || fromId == targetId) continue;
+      for (final doctorRow in doctorRows) {
+        final doctorId = doctorRow['id'];
+        if (doctorId is! int) continue;
 
-        await txn.update(
-          'presupuesto_detalle',
-          {'tratamiento_id': targetId},
-          where: 'tratamiento_id = ?',
-          whereArgs: [fromId],
-        );
-        await txn.delete(
+        final toRows = await txn.query(
           'tratamientos',
-          where: 'id = ?',
-          whereArgs: [fromId],
+          columns: ['id'],
+          where: 'doctor_id = ? AND LOWER(TRIM(nombre)) = LOWER(TRIM(?))',
+          whereArgs: [doctorId, toName],
+          orderBy: 'id ASC',
+          limit: 1,
         );
+        if (toRows.isEmpty) continue;
+        final targetId = toRows.first['id'];
+        if (targetId is! int) continue;
+
+        final fromRows = await txn.query(
+          'tratamientos',
+          columns: ['id'],
+          where: 'doctor_id = ? AND LOWER(TRIM(nombre)) = LOWER(TRIM(?))',
+          whereArgs: [doctorId, fromName],
+          orderBy: 'id ASC',
+        );
+
+        for (final row in fromRows) {
+          final fromId = row['id'];
+          if (fromId is! int || fromId == targetId) continue;
+
+          await txn.update(
+            'presupuesto_detalle',
+            {'tratamiento_id': targetId},
+            where: 'tratamiento_id = ?',
+            whereArgs: [fromId],
+          );
+          await txn.delete(
+            'tratamientos',
+            where: 'id = ?',
+            whereArgs: [fromId],
+          );
+        }
       }
     });
   }
@@ -534,7 +592,7 @@ class DatabaseHelper {
   Future<void> _deduplicateTreatments(Database db) async {
     final rows = await db.query(
       'tratamientos',
-      columns: ['id', 'nombre'],
+      columns: ['id', 'nombre', 'doctor_id'],
       orderBy: 'id ASC',
     );
 
@@ -543,9 +601,11 @@ class DatabaseHelper {
       for (final row in rows) {
         final id = row['id'];
         final name = (row['nombre'] as String? ?? '').trim();
+        final doctorId = row['doctor_id'] as int?;
         if (id is! int || name.isEmpty) continue;
 
-        final key = _normalizedKey(name);
+        final doctorScope = doctorId?.toString() ?? 'global';
+        final key = '$doctorScope|${_normalizedKey(name)}';
         final keepId = keepByName[key];
         if (keepId == null) {
           keepByName[key] = id;
@@ -596,7 +656,9 @@ class DatabaseHelper {
 
     final map = doctor.toMap()..remove('id');
     map['nombre'] = normalizedName;
-    return db.insert('doctores', map);
+    final newDoctorId = await db.insert('doctores', map);
+    await _ensureDoctorTreatments(db, newDoctorId);
+    return newDoctorId;
   }
 
   Future<int> updateDoctor(Doctor doctor) async {
@@ -630,6 +692,7 @@ class DatabaseHelper {
         where: 'doctor_id = ?',
         whereArgs: [doctorId],
       );
+      await txn.delete('tratamientos', where: 'doctor_id = ?', whereArgs: [doctorId]);
       return txn.delete('doctores', where: 'id = ?', whereArgs: [doctorId]);
     });
   }
@@ -723,15 +786,31 @@ class DatabaseHelper {
     });
   }
 
-  Future<List<Treatment>> getTreatments({String? query}) async {
+  Future<List<Treatment>> getTreatments({String? query, int? doctorId}) async {
     final db = await database;
-    final where = query != null && query.trim().isNotEmpty ? 'nombre LIKE ?' : null;
-    final whereArgs = where != null ? ['%${query!.trim()}%'] : null;
+    if (doctorId != null) {
+      await _ensureDoctorTreatments(db, doctorId);
+    }
+
+    final clauses = <String>[];
+    final whereArgs = <Object?>[];
+
+    if (doctorId != null) {
+      clauses.add('doctor_id = ?');
+      whereArgs.add(doctorId);
+    }
+
+    if (query != null && query.trim().isNotEmpty) {
+      clauses.add('nombre LIKE ?');
+      whereArgs.add('%${query.trim()}%');
+    }
+
+    final where = clauses.isEmpty ? null : clauses.join(' AND ');
 
     final rows = await db.query(
       'tratamientos',
       where: where,
-      whereArgs: whereArgs,
+      whereArgs: whereArgs.isEmpty ? null : whereArgs,
       orderBy: 'nombre ASC',
     );
     return rows.map(Treatment.fromMap).toList();
@@ -765,14 +844,14 @@ class DatabaseHelper {
     return map;
   }
 
-  Future<int> insertTreatment(Treatment treatment) async {
+  Future<int> insertTreatment(Treatment treatment, {required int doctorId}) async {
     final db = await database;
     final normalizedName = treatment.name.trim();
     final existing = await db.query(
       'tratamientos',
       columns: ['id'],
-      where: 'LOWER(TRIM(nombre)) = LOWER(TRIM(?))',
-      whereArgs: [normalizedName],
+      where: 'doctor_id = ? AND LOWER(TRIM(nombre)) = LOWER(TRIM(?))',
+      whereArgs: [doctorId, normalizedName],
       limit: 1,
     );
     if (existing.isNotEmpty) {
@@ -781,23 +860,30 @@ class DatabaseHelper {
     }
 
     final map = treatment.toMap()..remove('id');
+    map['doctor_id'] = doctorId;
     map['nombre'] = normalizedName;
     return db.insert('tratamientos', map);
   }
 
-  Future<int> updateTreatment(Treatment treatment) async {
+  Future<int> updateTreatment(Treatment treatment, {required int doctorId}) async {
     final db = await database;
     return db.update(
       'tratamientos',
-      treatment.toMap()..remove('id'),
-      where: 'id = ?',
-      whereArgs: [treatment.id],
+      treatment.toMap()
+        ..remove('id')
+        ..remove('doctor_id'),
+      where: 'id = ? AND doctor_id = ?',
+      whereArgs: [treatment.id, doctorId],
     );
   }
 
-  Future<int> deleteTreatment(int id) async {
+  Future<int> deleteTreatment(int id, {required int doctorId}) async {
     final db = await database;
-    return db.delete('tratamientos', where: 'id = ?', whereArgs: [id]);
+    return db.delete(
+      'tratamientos',
+      where: 'id = ? AND doctor_id = ?',
+      whereArgs: [id, doctorId],
+    );
   }
 
   Future<int> insertEstimate({

@@ -4,7 +4,12 @@ import '../database/database_helper.dart';
 import '../models/treatment.dart';
 
 class SettingsTreatmentsScreen extends StatefulWidget {
-  const SettingsTreatmentsScreen({super.key});
+  final int? activeDoctorId;
+
+  const SettingsTreatmentsScreen({
+    super.key,
+    required this.activeDoctorId,
+  });
 
   @override
   State<SettingsTreatmentsScreen> createState() => _SettingsTreatmentsScreenState();
@@ -102,7 +107,10 @@ class _SettingsTreatmentsScreenState extends State<SettingsTreatmentsScreen> {
 
   Future<void> _load() async {
     setState(() => _loading = true);
-    final rows = await _db.getTreatments(query: _searchController.text);
+    final rows = await _db.getTreatments(
+      query: _searchController.text,
+      doctorId: widget.activeDoctorId,
+    );
     if (!mounted) return;
     setState(() {
       _items = rows;
@@ -246,6 +254,8 @@ class _SettingsTreatmentsScreenState extends State<SettingsTreatmentsScreen> {
 
     final normalizedColor = selectedColor;
     final iconKey = selectedIcon == 'generic' ? null : selectedIcon;
+    final doctorId = widget.activeDoctorId;
+    if (doctorId == null) return;
 
     if (treatment == null) {
       await _db.insertTreatment(
@@ -256,6 +266,7 @@ class _SettingsTreatmentsScreenState extends State<SettingsTreatmentsScreen> {
           iconKey: iconKey,
           pieceType: selectedPieceType,
         ),
+        doctorId: doctorId,
       );
     } else {
       await _db.updateTreatment(
@@ -267,6 +278,7 @@ class _SettingsTreatmentsScreenState extends State<SettingsTreatmentsScreen> {
           iconKey: iconKey,
           pieceType: selectedPieceType,
         ),
+        doctorId: doctorId,
       );
     }
 
@@ -294,7 +306,10 @@ class _SettingsTreatmentsScreenState extends State<SettingsTreatmentsScreen> {
 
     if (confirmed != true) return;
 
-    await _db.deleteTreatment(treatment.id!);
+    final doctorId = widget.activeDoctorId;
+    if (doctorId == null) return;
+
+    await _db.deleteTreatment(treatment.id!, doctorId: doctorId);
     await _load();
   }
 

@@ -101,7 +101,7 @@ class _CreateEstimateScreenState extends State<CreateEstimateScreen> {
     await _db.ensureDefaults();
 
     final patients = await _db.getPatients();
-    final treatments = await _db.getTreatments();
+    final treatments = await _db.getTreatments(doctorId: widget.activeDoctorId);
     final usageByDoctor = await _db.getTreatmentUsageCounts(doctorId: widget.activeDoctorId);
 
     setState(() {
@@ -208,6 +208,66 @@ class _CreateEstimateScreenState extends State<CreateEstimateScreen> {
       } catch (_) {}
     }
     return null;
+  }
+
+  String? _normalizePieceCodeForTreatment(Treatment treatment, String? rawCode) {
+    final pieceType = (treatment.pieceType ?? 'pieza').trim().toLowerCase();
+    final code = _normalizePieceCode(rawCode);
+
+    return switch (pieceType) {
+      'general' => 'X',
+      'arcada' => _normalizeArcadaCode(code),
+      'sector' => _normalizeSectorCode(code),
+      _ => _normalizePiezaCode(code),
+    };
+  }
+
+  String? _normalizePiezaCode(String? code) {
+    if (code == null) return null;
+    if (RegExp(r'^\d{2}$').hasMatch(code)) return code;
+    return null;
+  }
+
+  String? _normalizeSectorCode(String? code) {
+    if (code == null) return null;
+    if (RegExp(r'^\d{2}-\d{2}$').hasMatch(code)) {
+      final parts = code.split('-');
+      final start = parts[0];
+      final end = parts[1];
+      if (start[0] != end[0]) return null;
+      return int.parse(start) <= int.parse(end) ? '$start-$end' : '$end-$start';
+    }
+    if (RegExp(r'^\d{2}$').hasMatch(code)) return code;
+    return null;
+  }
+
+  String? _normalizeArcadaCode(String? code) {
+    if (code == null) return null;
+    if (code == '+' || code == '-') return code;
+    if (RegExp(r'^\d{2}$').hasMatch(code)) {
+      return (code.startsWith('1') || code.startsWith('2')) ? '+' : '-';
+    }
+    if (RegExp(r'^\d{2}-\d{2}$').hasMatch(code)) {
+      final parts = code.split('-');
+      final start = parts[0];
+      final end = parts[1];
+      final isUpper = (start.startsWith('1') || start.startsWith('2')) && (end.startsWith('1') || end.startsWith('2'));
+      final isLower = (start.startsWith('3') || start.startsWith('4')) && (end.startsWith('3') || end.startsWith('4'));
+      if (isUpper) return '+';
+      if (isLower) return '-';
+    }
+    return null;
+  }
+
+  String? _buildNoteForTreatmentCode(Treatment treatment, String? code) {
+    if (code == null) return null;
+    final pieceType = (treatment.pieceType ?? 'pieza').trim().toLowerCase();
+    return switch (pieceType) {
+      'general' => 'General',
+      'arcada' => code == '+' ? 'Arcada superior' : 'Arcada inferior',
+      'sector' => code.contains('-') ? 'Sector $code' : 'Pieza $code',
+      _ => 'Pieza $code',
+    };
   }
 
   Future<void> _loadEstimateForEdit(int estimateId) async {
@@ -618,7 +678,7 @@ class _CreateEstimateScreenState extends State<CreateEstimateScreen> {
               final qty = int.tryParse(quantityController.text.trim()) ?? 1;
               if (qty <= 0) return;
               final pieceRaw = toothController.text.trim();
-              final piece = _normalizePieceCode(pieceRaw);
+              final piece = _normalizePieceCodeForTreatment(selectedTreatment, pieceRaw);
               if (pieceRaw.isNotEmpty && piece == null) return;
               Navigator.pop(
                 context,
@@ -641,7 +701,11 @@ class _CreateEstimateScreenState extends State<CreateEstimateScreen> {
   void _commitParsedTreatments(List<ParsedTreatment> parsed) {
     setState(() {
       for (final item in parsed) {
-        final detectedTooth = _extractPieceCode(item.note);
+        final detectedTooth = _normalizePieceCodeForTreatment(
+          item.treatment,
+          _extractPieceCode(item.note),
+        );
+        final normalizedNote = _buildNoteForTreatmentCode(item.treatment, detectedTooth);
         final index = _lines.indexWhere(
           (line) => line.treatment.id == item.treatment.id && line.toothCode == detectedTooth,
         );
@@ -652,7 +716,7 @@ class _CreateEstimateScreenState extends State<CreateEstimateScreen> {
               treatment: item.treatment,
               quantity: item.quantity,
               unitPrice: item.treatment.price,
-              note: item.note,
+              note: normalizedNote ?? item.note,
               toothCode: detectedTooth,
             ),
           );
@@ -676,8 +740,13 @@ class _CreateEstimateScreenState extends State<CreateEstimateScreen> {
 
   String? _extractPieceCode(String? note) {
     if (note == null) return null;
+    final normalizedNote = note.trim().toLowerCase();
+    if (normalizedNote.startsWith('arcada superior')) return '+';
+    if (normalizedNote.startsWith('arcada inferior')) return '-';
+    if (normalizedNote.startsWith('general')) return 'X';
+
     final raw = note
-        .replaceFirst(RegExp(r'^\s*(?:pieza|sector)\s*', caseSensitive: false), '')
+        .replaceFirst(RegExp(r'^\s*(?:pieza|sector|arcada\s+superior|arcada\s+inferior|general)\s*', caseSensitive: false), '')
         .trim();
     return _normalizePieceCode(raw);
   }
@@ -817,9 +886,10 @@ class _CreateEstimateScreenState extends State<CreateEstimateScreen> {
         iconKey: 'generic',
         pieceType: selectedPieceType,
       ),
+      doctorId: widget.activeDoctorId!,
     );
 
-    final treatments = await _db.getTreatments();
+    final treatments = await _db.getTreatments(doctorId: widget.activeDoctorId);
     Treatment? selected;
     for (final treatment in treatments) {
       if (treatment.id == insertedId) {
@@ -1330,13 +1400,14 @@ class _CreateEstimateScreenState extends State<CreateEstimateScreen> {
                 final quantity = int.tryParse(qtyController.text) ?? line.quantity;
                 final unitPrice = double.tryParse(priceController.text.replaceAll(',', '.')) ?? line.unitPrice;
                 final pieceRaw = toothController.text.trim();
-                final piece = _normalizePieceCode(pieceRaw);
+                final piece = _normalizePieceCodeForTreatment(line.treatment, pieceRaw);
                 if (pieceRaw.isNotEmpty && piece == null) return;
 
                 setState(() {
                   line.quantity = quantity;
                   line.unitPrice = unitPrice;
                   line.toothCode = piece;
+                  line.note = _buildNoteForTreatmentCode(line.treatment, piece);
                 });
                 Navigator.pop(context);
               },
@@ -1370,9 +1441,12 @@ class _EditableParsedTreatment {
   }
 
   ParsedTreatment toParsedTreatment() {
-    final piece = _normalizePieceCodeValue(toothCode);
+    final piece = _normalizePieceCodeForTreatmentValue(treatment, toothCode);
+    final pieceType = (treatment.pieceType ?? 'pieza').trim().toLowerCase();
     final note = switch (piece) {
       null => null,
+      _ when pieceType == 'general' => 'General',
+      final value when pieceType == 'arcada' => value == '+' ? 'Arcada superior' : 'Arcada inferior',
       final value when value.contains('-') => 'Sector $value',
       _ => 'Pieza $piece',
     };
@@ -1386,10 +1460,64 @@ class _EditableParsedTreatment {
 
   static String? _extractPieceCodeFromNote(String? note) {
     if (note == null) return null;
+    final normalizedNote = note.trim().toLowerCase();
+    if (normalizedNote.startsWith('arcada superior')) return '+';
+    if (normalizedNote.startsWith('arcada inferior')) return '-';
+    if (normalizedNote.startsWith('general')) return 'X';
+
     final raw = note
-        .replaceFirst(RegExp(r'^\s*(?:pieza|sector)\s*', caseSensitive: false), '')
+        .replaceFirst(RegExp(r'^\s*(?:pieza|sector|arcada\s+superior|arcada\s+inferior|general)\s*', caseSensitive: false), '')
         .trim();
     return _normalizePieceCodeValue(raw);
+  }
+
+  static String? _normalizePieceCodeForTreatmentValue(Treatment treatment, String? rawCode) {
+    final pieceType = (treatment.pieceType ?? 'pieza').trim().toLowerCase();
+    final code = _normalizePieceCodeValue(rawCode);
+
+    return switch (pieceType) {
+      'general' => 'X',
+      'arcada' => _normalizeArcadaCodeValue(code),
+      'sector' => _normalizeSectorCodeValue(code),
+      _ => _normalizePiezaCodeValue(code),
+    };
+  }
+
+  static String? _normalizePiezaCodeValue(String? code) {
+    if (code == null) return null;
+    if (RegExp(r'^\d{2}$').hasMatch(code)) return code;
+    return null;
+  }
+
+  static String? _normalizeSectorCodeValue(String? code) {
+    if (code == null) return null;
+    if (RegExp(r'^\d{2}-\d{2}$').hasMatch(code)) {
+      final parts = code.split('-');
+      final start = parts[0];
+      final end = parts[1];
+      if (start[0] != end[0]) return null;
+      return int.parse(start) <= int.parse(end) ? '$start-$end' : '$end-$start';
+    }
+    if (RegExp(r'^\d{2}$').hasMatch(code)) return code;
+    return null;
+  }
+
+  static String? _normalizeArcadaCodeValue(String? code) {
+    if (code == null) return null;
+    if (code == '+' || code == '-') return code;
+    if (RegExp(r'^\d{2}$').hasMatch(code)) {
+      return (code.startsWith('1') || code.startsWith('2')) ? '+' : '-';
+    }
+    if (RegExp(r'^\d{2}-\d{2}$').hasMatch(code)) {
+      final parts = code.split('-');
+      final start = parts[0];
+      final end = parts[1];
+      final isUpper = (start.startsWith('1') || start.startsWith('2')) && (end.startsWith('1') || end.startsWith('2'));
+      final isLower = (start.startsWith('3') || start.startsWith('4')) && (end.startsWith('3') || end.startsWith('4'));
+      if (isUpper) return '+';
+      if (isLower) return '-';
+    }
+    return null;
   }
 
   static String? _normalizePieceCodeValue(String? raw) {

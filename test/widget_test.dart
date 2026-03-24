@@ -174,6 +174,65 @@ void main() {
     expect(result.first.quantity, 2);
   });
 
+  test('Parser prioriza endodoncia multirradicular frente a rehacer endodoncia', () {
+    final parser = TextParserService.instance;
+    final treatments = [
+      const Treatment(id: 40, name: 'Endodoncia multirradicular', price: 180),
+      const Treatment(id: 41, name: 'Rehacer endodoncia', price: 180),
+    ];
+
+    final result = parser.parseTranscription(
+      transcribedText: 'endodoncia multi radicular en el 12',
+      availableTreatments: treatments,
+    );
+
+    expect(result.length, 1);
+    expect(result.first.treatment.id, 40);
+    expect(result.first.note, 'Pieza 12');
+  });
+
+  test('Parser respeta tratamiento de sector en injerto de tejido conectivo', () {
+    final parser = TextParserService.instance;
+    final treatments = [
+      const Treatment(
+        id: 50,
+        name: 'Injerto de tejido conectivo',
+        price: 500,
+        pieceType: 'sector',
+      ),
+    ];
+
+    final result = parser.parseTranscription(
+      transcribedText: 'injerto de tejido conectivo entre el 21 y el 23',
+      availableTreatments: treatments,
+    );
+
+    expect(result.length, 1);
+    expect(result.first.treatment.id, 50);
+    expect(result.first.note, 'Sector 21-23');
+  });
+
+  test('Parser normaliza raspa ge como raspaje', () {
+    final parser = TextParserService.instance;
+    final treatments = [
+      const Treatment(
+        id: 60,
+        name: 'Raspaje y alisado por cuadrante',
+        price: 80,
+        pieceType: 'sector',
+      ),
+    ];
+
+    final result = parser.parseTranscription(
+      transcribedText: 'raspa ge y alisado por cuadrante entre 21 y 24',
+      availableTreatments: treatments,
+    );
+
+    expect(result.length, 1);
+    expect(result.first.treatment.id, 60);
+    expect(result.first.note, 'Sector 21-24');
+  });
+
   test('Parser dataset amplio de frases reales y typos', () {
     final parser = TextParserService.instance;
     final treatments = [
