@@ -1,0 +1,103 @@
+workflows:
+  android-release:
+    name: PresDent 2.0 Android Release
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+    triggering:
+      events:
+        - push
+        - tag
+      branch_patterns:
+        - pattern: main
+          include: true
+          source: true
+      cancel_previous_builds: true
+    environment:
+      flutter: stable
+      groups:
+        - secret
+      vars:
+        APP_ID_ANDROID: com.example.presdental
+    scripts:
+      - name: Clean and fetch deps
+        script: |
+          flutter clean
+          flutter pub get
+
+      - name: Generate key.properties for Android signing
+        script: |
+          if [ -n "$CM_KEYSTORE" ] && [ -n "$CM_KEY_ALIAS" ] && [ -n "$CM_KEYSTORE_PASSWORD" ] && [ -n "$CM_KEY_PASSWORD" ]; then
+            echo "$CM_KEYSTORE" | base64 --decode > "$CM_BUILD_DIR/android/app/upload-keystore.jks"
+            cat > "$CM_BUILD_DIR/android/key.properties" <<EOF
+            storeFile=app/upload-keystore.jks
+            storePassword=$CM_KEYSTORE_PASSWORD
+            keyAlias=$CM_KEY_ALIAS
+            keyPassword=$CM_KEY_PASSWORD
+            EOF
+            echo "Release signing configured."
+          else
+            echo "Signing secrets missing: build will use debug signing fallback."
+          fi
+
+      - name: Build release APKs and AAB
+        script: |
+          flutter build apk --release --split-per-abi
+
+          flutter build appbundle --release
+    artifacts:
+      - build/app/outputs/flutter-apk/*.apk
+      - build/app/outputs/bundle/release/*.aab
+      - build/app/outputs/mapping/release/mapping.txt
+
+  ios-unsigned-ipa:
+    name: PresDent 2.0 iOS Unsigned IPA
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+    triggering:
+      events:
+        - push
+        - tag
+      branch_patterns:
+        - pattern: main
+          include: true
+          source: true
+      cancel_previous_builds: true
+    environment:
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+      groups:
+        - secret
+      vars:
+        BUNDLE_ID: com.example.presdental
+    scripts:
+      - name: Clean and install dependencies
+        script: |
+          flutter clean
+          flutter pub get
+          rm -rf ios/Pods ios/Podfile.lock
+          cd ios
+          pod install --repo-update
+          cd ..
+
+      - name: Build iOS release app (no codesign)
+        script: |
+          BUILD_NO="${BUILD_NUMBER:-1}"
+          flutter build ios --release --no-codesign \
+            --build-number="$BUILD_NO"
+
+      - name: Package unsigned IPA
+        script: |
+          APP_PATH="build/ios/iphoneos/Runner.app"
+          PAYLOAD_PATH="build/ios/ipa/Payload"
+          IPA_PATH="build/ios/ipa/PresDent-2.0-unsigned.ipa"
+
+          rm -rf "$PAYLOAD_PATH" "$IPA_PATH"
+          mkdir -p "$PAYLOAD_PATH"
+          cp -R "$APP_PATH" "$PAYLOAD_PATH/Runner.app"
+
+          cd build/ios/ipa
+          zip -r "$(basename "$IPA_PATH")" Payload
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
