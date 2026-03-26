@@ -147,6 +147,7 @@ class MainShell extends StatefulWidget {
 
 class _MainShellState extends State<MainShell> {
   final _db = DatabaseHelper.instance;
+  final _themeService = AppThemeService.instance;
   int _currentIndex = 0;
   late int? _activeDoctorId;
   late String _activeDoctorName;
@@ -424,6 +425,22 @@ class _MainShellState extends State<MainShell> {
               ),
             ],
           ),
+          actions: _currentIndex == settingsIndex
+              ? [
+                  ValueListenableBuilder<ThemeMode>(
+                    valueListenable: _themeService.themeMode,
+                    builder: (context, mode, _) {
+                      final isDark = mode == ThemeMode.dark;
+                      return IconButton.filledTonal(
+                        tooltip: isDark ? 'Modo claro' : 'Modo oscuro',
+                        onPressed: () => _themeService.setDarkMode(!isDark),
+                        icon: Icon(isDark ? Icons.light_mode_outlined : Icons.nightlight_round),
+                      );
+                    },
+                  ),
+                  const SizedBox(width: 8),
+                ]
+              : null,
         ),
         bottomNavigationBar: NavigationBar(
           selectedIndex: _currentIndex,

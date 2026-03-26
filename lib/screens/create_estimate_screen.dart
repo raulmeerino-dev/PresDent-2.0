@@ -1120,7 +1120,7 @@ class _CreateEstimateScreenState extends State<CreateEstimateScreen> {
                     children: [
                       const Icon(Icons.calendar_month, size: 20),
                       const SizedBox(width: 8),
-                      Text('Fecha: ${DateFormat('dd/MM/yyyy').format(_selectedDate)}'),
+                      Text(DateFormat('dd/MM/yyyy').format(_selectedDate)),
                       const Spacer(),
                       TextButton(onPressed: _pickDate, child: const Text('Cambiar')),
                     ],

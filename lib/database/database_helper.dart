@@ -53,6 +53,7 @@ class DatabaseHelper {
     {'nombre': 'Elevación con regeneración', 'precio': 900.0},
     {'nombre': 'Elevación de seno', 'precio': 500.0},
     {'nombre': 'Empaste', 'precio': 50.0},
+    {'nombre': 'Endodoncia', 'precio': 150.0},
     {'nombre': 'Endodoncia multirradicular', 'precio': 180.0},
     {'nombre': 'Endodoncia unirradicular', 'precio': 150.0},
     {'nombre': 'Estudio de ortodoncia', 'precio': 50.0},
@@ -116,7 +117,7 @@ class DatabaseHelper {
 
     return openDatabase(
       path,
-      version: 7,
+      version: 8,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
       onOpen: (db) async {
@@ -222,6 +223,9 @@ class DatabaseHelper {
       await _ensureSchemaCompatibility(db);
     }
     if (oldVersion < 7) {
+      await _ensureSchemaCompatibility(db);
+    }
+    if (oldVersion < 8) {
       await _ensureSchemaCompatibility(db);
     }
   }
@@ -350,6 +354,7 @@ class DatabaseHelper {
     await _ensureDoctorScopedTreatments(db);
     await _linkDoctorTreatmentsToAdmin(db, adminDoctorId: adminDoctorId);
     await _syncRequestedTreatmentCatalog(db);
+    await _repairLegacyCatalogPieceTypes(db);
 
     await _replaceDeprecatedTreatment(
       db,
@@ -408,6 +413,37 @@ class DatabaseHelper {
         },
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
+    });
+  }
+
+  Future<void> _repairLegacyCatalogPieceTypes(Database db) async {
+    await db.transaction((txn) async {
+      final rows = await txn.query(
+        'tratamientos',
+        columns: ['id', 'nombre', 'pieza_tipo', 'is_customized'],
+      );
+
+      for (final row in rows) {
+        final id = row['id'];
+        if (id is! int) continue;
+
+        final isCustomized = (row['is_customized'] as int? ?? 0) == 1;
+        if (isCustomized) continue;
+
+        final name = (row['nombre'] as String? ?? '').trim();
+        if (name.isEmpty) continue;
+
+        final inferredPieceType = _inferCatalogPieceType(_normalizedKey(name));
+        final currentPieceType = (row['pieza_tipo'] as String? ?? '').trim().toLowerCase();
+        if (currentPieceType == inferredPieceType) continue;
+
+        await txn.update(
+          'tratamientos',
+          {'pieza_tipo': inferredPieceType},
+          where: 'id = ?',
+          whereArgs: [id],
+        );
+      }
     });
   }
 

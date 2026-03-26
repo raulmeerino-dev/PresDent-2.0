@@ -262,7 +262,7 @@ class _HistoryScreenState extends State<HistoryScreen> with SingleTickerProvider
                       alignment: Alignment.centerLeft,
                       child: InputChip(
                         avatar: const Icon(Icons.calendar_today, size: 16),
-                        label: Text('Fecha: ${DateFormat('dd/MM/yyyy').format(_selectedDay!)}'),
+                        label: Text(DateFormat('dd/MM/yyyy').format(_selectedDay!)),
                         onDeleted: () => setState(() => _selectedDay = null),
                       ),
                     ),

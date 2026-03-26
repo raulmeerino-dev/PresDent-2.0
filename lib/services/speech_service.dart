@@ -12,6 +12,7 @@ class SpeechService {
   String? _lastInitError;
   bool _keepListening = false;
   bool _restartInProgress = false;
+  bool _sessionStartInProgress = false;
   String? _activeLocaleId;
   void Function(String text, bool isFinal)? _activeOnResult;
   void Function(bool isListening)? _activeOnListeningStateChanged;
@@ -84,6 +85,11 @@ class SpeechService {
       return;
     }
 
+    if (_keepListening || _speechToText.isListening || _sessionStartInProgress) {
+      onListeningStateChanged(true);
+      return;
+    }
+
     final selectedLocale = localeId ?? await resolveBestSpanishLocale();
     _keepListening = true;
     _restartInProgress = false;
@@ -105,6 +111,12 @@ class SpeechService {
     if (localeId == null || onResult == null || onListeningStateChanged == null || onError == null) {
       return;
     }
+
+    if (_speechToText.isListening || _sessionStartInProgress) {
+      return;
+    }
+
+    _sessionStartInProgress = true;
 
     try {
       await _speechToText.listen(
@@ -131,11 +143,13 @@ class SpeechService {
       if (!_keepListening) return;
       onError(e.toString());
       _scheduleRestartIfNeeded();
+    } finally {
+      _sessionStartInProgress = false;
     }
   }
 
   void _scheduleRestartIfNeeded() {
-    if (!_keepListening || _restartInProgress) return;
+    if (!_keepListening || _restartInProgress || _sessionStartInProgress) return;
     _restartInProgress = true;
 
     Future<void>.delayed(const Duration(milliseconds: 250), () async {
@@ -143,12 +157,12 @@ class SpeechService {
         _restartInProgress = false;
         return;
       }
-      if (_speechToText.isListening) {
+      if (_speechToText.isListening || _sessionStartInProgress) {
         _restartInProgress = false;
         return;
       }
-      _restartInProgress = false;
       await _startListeningSession();
+      _restartInProgress = false;
     });
   }
 
@@ -192,6 +206,7 @@ class SpeechService {
   Future<void> stopListening() {
     _keepListening = false;
     _restartInProgress = false;
+    _sessionStartInProgress = false;
     _activeOnListeningStateChanged?.call(false);
     return _speechToText.stop();
   }

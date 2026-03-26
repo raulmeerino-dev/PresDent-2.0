@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import '../services/app_theme_service.dart';
 import 'settings_doctors_screen.dart';
 import 'settings_patients_screen.dart';
 import 'settings_pdf_screen.dart';
@@ -20,21 +19,6 @@ class SettingsMenuScreen extends StatelessWidget {
       body: ListView(
         padding: const EdgeInsets.all(12),
         children: [
-          ValueListenableBuilder<ThemeMode>(
-            valueListenable: AppThemeService.instance.themeMode,
-            builder: (context, mode, _) {
-              final isDark = mode == ThemeMode.dark;
-              return Align(
-                alignment: Alignment.topRight,
-                child: IconButton.filledTonal(
-                  tooltip: isDark ? 'Modo claro' : 'Modo oscuro',
-                  onPressed: () => AppThemeService.instance.setDarkMode(!isDark),
-                  icon: Icon(isDark ? Icons.light_mode_outlined : Icons.nightlight_round),
-                ),
-              );
-            },
-          ),
-          const SizedBox(height: 4),
           _ModuleTile(
             icon: Icons.medication_outlined,
             title: 'Tratamientos',

@@ -224,7 +224,7 @@ class _EstimateDetailScreenState extends State<EstimateDetailScreen> {
                           children: [
                             Text(_summary!.patientName, style: Theme.of(context).textTheme.titleLarge),
                             const SizedBox(height: 6),
-                            Text('Fecha: ${DateFormat('dd/MM/yyyy HH:mm').format(_summary!.date)}'),
+                            Text(DateFormat('dd/MM/yyyy HH:mm').format(_summary!.date)),
                           ],
                         ),
                       ),

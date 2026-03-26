@@ -122,6 +122,7 @@ class TextParserService {
 
     for (final segment in segments) {
       final toothMentions = _extractToothMentions(segment);
+      final archMention = _extractArchMention(segment);
       final bridgeByRange = _resolveBridgeTreatmentForSegment(
         segment: segment,
         availableTreatments: availableTreatments,
@@ -198,6 +199,17 @@ class TextParserService {
             );
             continue;
           }
+        }
+
+        if (_isArcadaTreatment(resolvedTreatment) && archMention != null) {
+          matches.add(
+            ParsedTreatment(
+              treatment: resolvedTreatment,
+              quantity: quantity,
+              note: archMention == '+' ? 'Arcada superior' : 'Arcada inferior',
+            ),
+          );
+          continue;
         }
 
         if (_isBridgeTreatment(resolvedTreatment) && toothMentions.length >= 2) {
@@ -412,6 +424,26 @@ class TextParserService {
     return _normalize(treatment.pieceType ?? '') == 'sector';
   }
 
+  bool _isArcadaTreatment(Treatment treatment) {
+    return _normalize(treatment.pieceType ?? '') == 'arcada';
+  }
+
+  String? _extractArchMention(String text) {
+    final normalized = _normalize(text);
+
+    if (RegExp(r'\barcada\s+superior\b').hasMatch(normalized) ||
+        RegExp(r'\barriba\b').hasMatch(normalized)) {
+      return '+';
+    }
+
+    if (RegExp(r'\barcada\s+inferior\b').hasMatch(normalized) ||
+        RegExp(r'\babajo\b').hasMatch(normalized)) {
+      return '-';
+    }
+
+    return null;
+  }
+
   String? _buildSectorNoteFromToothCodes(Iterable<String> toothCodes) {
     final unique = <String>[];
     for (final code in toothCodes) {
@@ -510,6 +542,7 @@ class TextParserService {
     String? treatmentRaw;
     int? quantityRaw;
     final teeth = <String>[];
+    String? archRaw;
     final parsed = <ParsedTreatment>[];
 
     void flushCurrent() {
@@ -517,6 +550,7 @@ class TextParserService {
         treatmentRaw = null;
         quantityRaw = null;
         teeth.clear();
+        archRaw = null;
         return;
       }
 
@@ -525,12 +559,21 @@ class TextParserService {
         treatmentRaw = null;
         quantityRaw = null;
         teeth.clear();
+        archRaw = null;
         return;
       }
 
       final sanitizedQuantity = _sanitizeQuantity(quantityRaw, teeth: teeth);
       final uniqueTeeth = teeth.toSet().toList();
-      if (uniqueTeeth.isEmpty) {
+      if (_isArcadaTreatment(treatment) && archRaw != null) {
+        parsed.add(
+          ParsedTreatment(
+            treatment: treatment,
+            quantity: sanitizedQuantity,
+            note: archRaw == '+' ? 'Arcada superior' : 'Arcada inferior',
+          ),
+        );
+      } else if (uniqueTeeth.isEmpty) {
         parsed.add(
           ParsedTreatment(
             treatment: treatment,
@@ -561,6 +604,7 @@ class TextParserService {
       treatmentRaw = null;
       quantityRaw = null;
       teeth.clear();
+      archRaw = null;
     }
 
     for (final match in matches) {
@@ -588,6 +632,7 @@ class TextParserService {
 
       if (key == 'pieza') {
         final normalizedValue = _normalize(value);
+        archRaw ??= _extractArchMention(normalizedValue);
         final codes = _extractToothMentions(normalizedValue).map((item) => item.code);
         for (final code in codes) {
           if (_validFdiToothCodes.contains(code)) {
@@ -743,6 +788,15 @@ class TextParserService {
 
   List<String> _buildAliases(String canonical) {
     final direct = <String>[canonical];
+
+    if (canonical.contains('unirradicular')) {
+      direct.add(canonical.replaceAll('unirradicular', 'uni radicular'));
+      direct.add(canonical.replaceAll('unirradicular', 'uniradicular'));
+    }
+    if (canonical.contains('multirradicular')) {
+      direct.add(canonical.replaceAll('multirradicular', 'multi radicular'));
+      direct.add(canonical.replaceAll('multirradicular', 'multiradicular'));
+    }
 
     final baseParts = canonical.split(' ');
     if (baseParts.isNotEmpty) {
@@ -982,7 +1036,10 @@ class TextParserService {
         .replaceAll('endodonsia', 'endodoncia')
         .replaceAll('multi radicular', 'multirradicular')
         .replaceAll('multi rradicular', 'multirradicular')
+        .replaceAll('multiradicular', 'multirradicular')
         .replaceAll('uni radicular', 'unirradicular')
+        .replaceAll('uni rradicular', 'unirradicular')
+        .replaceAll('uniradicular', 'unirradicular')
         .replaceAll('estraccion', 'extraccion')
         .replaceAll('extraccion normal', 'exodoncia normal')
         .replaceAll('extraccion compleja', 'exodoncia compleja')
